@@ -87,8 +87,17 @@ jobs:
           path: project/android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 30
 
+      - name: Check if keystore secret exists
+        id: keystore_check
+        run: |
+          if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
+            echo "has_keystore=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_keystore=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Build signed release APK
-        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        if: steps.keystore_check.outputs.has_keystore == 'true'
         working-directory: project/android
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -104,9 +113,6 @@ jobs:
             -Pandroid.injected.signing.key.password="$KEY_PASSWORD"
 
       - name: Upload signed release APK
-        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        if: steps.keystore_check.outputs.has_keystore == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: kiraya-release-apk
-          path: project/android/app/build/outputs/apk/release/app-release.apk
-          retention-days: 90
