@@ -1,0 +1,112 @@
+name: Build Kiraya APK
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "**.zip"
+      - "**.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Find and unzip source zip
+        run: |
+          ZIP=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
+          if [ -z "$ZIP" ]; then
+            echo "ERROR: No .zip file found in repo root."
+            exit 1
+          fi
+          echo "Found zip: $ZIP"
+          mkdir -p _unzipped
+          unzip -q "$ZIP" -d _unzipped
+          mkdir -p project
+          INNER=$(find _unzipped -maxdepth 1 -mindepth 1 -type d | head -n 1)
+          if [ -n "$INNER" ]; then
+            mv "$INNER"/* project/ 2>/dev/null || true
+          else
+            mv _unzipped/* project/ 2>/dev/null || true
+          fi
+          echo "Project contents:"
+          ls project/
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install dependencies
+        working-directory: project
+        run: npm install
+
+      - name: Build web app
+        working-directory: project
+        run: npm run build
+
+      - name: Add Capacitor Android platform
+        working-directory: project
+        run: |
+          if [ ! -d "android" ]; then
+            npx cap add android
+          else
+            echo "android/ already present, skipping"
+          fi
+
+      - name: Sync Capacitor
+        working-directory: project
+        run: npx cap sync android
+
+      - name: Make gradlew executable
+        working-directory: project
+        run: chmod +x android/gradlew
+
+      - name: Build debug APK
+        working-directory: project/android
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: kiraya-debug-apk
+          path: project/android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
+
+      - name: Build signed release APK
+        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        working-directory: project/android
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 --decode > ../../kiraya.keystore
+          ./gradlew assembleRelease --no-daemon \
+            -Pandroid.injected.signing.store.file=$(pwd)/../../kiraya.keystore \
+            -Pandroid.injected.signing.store.password="$KEYSTORE_PASSWORD" \
+            -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
+            -Pandroid.injected.signing.key.password="$KEY_PASSWORD"
+
+      - name: Upload signed release APK
+        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: kiraya-release-apk
+          path: project/android/app/build/outputs/apk/release/app-release.apk
+          retention-days: 90
